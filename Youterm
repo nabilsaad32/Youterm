@@ -1,0 +1,156 @@
+#!/bin/bash
+clear
+
+# Spinner while video loads
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while kill -0 "$pid" 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf " [%c]  Waiting for video to load...  " "$spinstr"
+        spinstr=$temp${spinstr%"$temp"}
+        sleep "$delay"
+        printf "\r"
+    done
+}
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[1;34m'
+NC='\033[0m'
+
+# Main menu
+main_menu() {
+    while true; do
+        clear
+        echo -e "${BLUE}"
+        cat << "EOF"
+ _   _  ___  _   _| |_ ___ _ __ _ __ ___  
+| | | |/ _ \| | | | __/ _ \ '__| '_ ` _ \ 
+| |_| | (_) | |_| | ||  __/ |  | | | | | |
+ \__, |\___/ \__,_|\__\___|_|  |_| |_| |_|
+ |___/                                    
+
+EOF
+        echo -e "${NC}"
+        echo "[1]  Manual video link"
+        echo "[2]  Load latest video from channels in 'list'"
+        echo "[3]  Search videos by keyword"
+        echo "[Q]  Quit"
+        echo
+        read -p "Choose option: " choice
+
+        case "$choice" in
+            1) manual_link ;;
+            2) read_channel_list ;;
+            3) keyword_search ;;
+            [Qq]) echo -e "\n[!] Bye!"; exit 0 ;;
+            *) echo -e "Invalid option. Try again."; sleep 1 ;;
+        esac
+    done
+}
+
+# Manual YouTube link input
+manual_link() {
+    while true; do
+        read -p "YTP> " link
+        link=$(echo "$link" | xargs)
+        [ -z "$link" ] && break
+        {
+            mpv --fs --ytdl-format='best[height=240]/best[height=360]' "$link"
+        } &
+        spinner $!
+        echo
+        read -p "[!] Press Enter to continue..." _
+    done
+}
+
+# Load latest video from each channel in 'list'
+read_channel_list() {
+    LIST_FILE="list"
+
+    [ ! -f "$LIST_FILE" ] && { echo "[X] File 'list' not found."; sleep 2; return; }
+
+    while IFS= read -r channel; do
+        channel=$(echo "$channel" | xargs)
+        [[ -z "$channel" || "$channel" == \#* ]] && continue
+
+        echo -e "[*] Channel: ${BLUE}$channel${NC}"
+
+        [[ "$channel" =~ ^[a-zA-Z0-9._-]+$ ]] && channel="@${channel}"
+
+        {
+            read -r title
+            read -r date
+            read -r id
+        } < <(yt-dlp "https://www.youtube.com/$channel" \
+            --playlist-end 1 \
+            --no-warnings \
+            --print "%(title)s" \
+            --print "%(upload_date>%Y-%m-%d)s" \
+            --print "%(id)s") || {
+            echo -e "[X] Failed to fetch videos for $channel\n"
+            continue
+        }
+
+        echo -e "${GREEN}Title: $title${NC}"
+        echo -e "Date: $date"
+        echo -e "\nURL:\nhttps://www.youtube.com/watch?v=$id"
+
+        read -p "[?] Play this video? (y/n): " play
+        [[ "$play" =~ ^[Yy]$ ]] && {
+            {
+                mpv --fs --ytdl-format='best[height=240]/best[height=360]' "https://www.youtube.com/watch?v=$id"
+            } &
+            spinner $!
+        }
+
+        echo -e "----------------------------\n"
+    done < "$LIST_FILE"
+
+    read -p "[!] Press Enter to return to menu..." _
+}
+
+# Search YouTube by keyword
+keyword_search() {
+    read -p "[!] Enter keyword: " keyword
+    keyword=$(echo "$keyword" | xargs)
+    [ -z "$keyword" ] && return
+
+    echo -e "\n[*] Searching for \"$keyword\"...\n"
+
+    results=$(yt-dlp "ytsearch10:$keyword" --print "%(title)s | %(id)s" 2>/dev/null)
+    
+    [ -z "$results" ] && { echo "[X] No results found."; sleep 2; return; }
+
+    # Use fzf if available
+    if command -v fzf >/dev/null; then
+        selected=$(echo "$results" | fzf --ansi --height=20 --reverse --prompt="Pick video: ")
+        selected_id=$(echo "$selected" | cut -d'|' -f2 | xargs)
+    else
+        echo "$results"
+        echo
+        read -p "[!] Enter video ID manually: " selected_id
+        selected_id=$(echo "$selected_id" | xargs)
+    fi
+
+    # Validate YouTube video ID (11-character alphanumeric)
+    if [[ ! "$selected_id" =~ ^[a-zA-Z0-9_-]{11}$ ]]; then
+        echo "[X] Invalid YouTube video ID"
+        sleep 2
+        return
+    fi
+
+    echo -e "\n[*] Playing: https://www.youtube.com/watch?v=$selected_id\n"
+
+    {
+        mpv --fs --ytdl-format='best[height=240]/best[height=360]' "https://www.youtube.com/watch?v=$selected_id"
+    } &
+    spinner $!
+    echo
+    read -p "[!] Press Enter to continue..." _
+}
+
+# Launch it all!
+main_menu
